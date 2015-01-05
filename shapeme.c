@@ -41,20 +41,11 @@
 #define MINALPHA 10
 #define MAXALPHA 90
 
-/* Probability of different mutations, expressed as 1 time every N iteartion.
- * For instance if the value is "40" it means that 1 time every 40 times on
- * average the mutation will be performed. */
-#define MUTATION_RANDMOVE_PROB 40
-#define MUTATION_MEDMOVE_PROB 40
-#define MUTATION_SMALLMOVE_PROB 40
-#define MUTATION_RANDCOLOR_PROB 40
-#define MUTATION_COLORMOVE_PROB 40
-#define MUTATION_RANDALPHA_PROB 40
-
 /* Configurable options. */
 int opt_use_triangles = 1;
 int opt_use_circles = 0;
 int opt_restart = 0;
+int opt_mutation_rate = 200;
 
 /* The global state defines the global state we save and restore
  * in addition to the best candidate. */
@@ -342,9 +333,10 @@ void normalize(struct triangle *r, int width, int height) {
         normalizeCircle(r,width,height);
 }
 
-/* Create a random triangle or circle. */
-void randomtriangle(struct triangle *r, int width, int height) {
+/* Triangle or circle? */
+int selectShapeType(void) {
     int triangle;
+
     if (opt_use_circles && opt_use_triangles) {
         triangle = random()&1;
     } else if (opt_use_circles) {
@@ -352,9 +344,20 @@ void randomtriangle(struct triangle *r, int width, int height) {
     } else {
         triangle = 1;
     }
+    return triangle ? TYPE_TRIANGLE : TYPE_CIRCLE;
+}
 
-    if (triangle) {
-        r->type = TYPE_TRIANGLE;
+/* Set random RGB and alpha. */
+void setRandomColor(struct triangle *r) {
+    r->r = random()%256;
+    r->g = random()%256;
+    r->b = random()%256;
+    r->alpha = randbetween(MINALPHA,MAXALPHA);
+}
+
+/* Set random triangle vertexes or circle center and radius. */
+void setRandomVertexes(struct triangle *r, int width, int height) {
+    if (r->type == TYPE_TRIANGLE) {
         r->u.t.x1 = random()%width;
         r->u.t.y1 = random()%height;
         r->u.t.x2 = random()%width;
@@ -362,36 +365,44 @@ void randomtriangle(struct triangle *r, int width, int height) {
         r->u.t.x3 = random()%width;
         r->u.t.y3 = random()%height;
     } else {
-        r->type = TYPE_CIRCLE;
         r->u.c.x1 = random()%width;
         r->u.c.y1 = random()%height;
         r->u.c.radius = random()%width;
     }
-    r->r = random()%256;
-    r->g = random()%256;
-    r->b = random()%256;
-    r->alpha = randbetween(MINALPHA,MAXALPHA);
+}
+
+/* Translate vertexes at random, from -delta to delta. */
+void moveVertexes(struct triangle *t, int delta) {
+    if (t->type == TYPE_TRIANGLE) {
+        t->u.t.x1 += randbetween(-delta,delta);
+        t->u.t.y1 += randbetween(-delta,delta);
+        t->u.t.x2 += randbetween(-delta,delta);
+        t->u.t.y2 += randbetween(-delta,delta);
+        t->u.t.x3 += randbetween(-delta,delta);
+        t->u.t.y3 += randbetween(-delta,delta);
+    } else {
+        t->u.c.x1 += randbetween(-delta,delta);
+        t->u.c.y1 += randbetween(-delta,delta);
+        t->u.c.radius += randbetween(-delta,delta);
+    }
+}
+
+/* Create a random triangle or circle. */
+void randomtriangle(struct triangle *r, int width, int height) {
+    r->type = selectShapeType();
+    setRandomVertexes(r,width,height);
+    setRandomColor(r);
     normalize(r,width,height);
 }
 
 /* Like randomtriangle() but vertex/radius can't be more than 'delta' pixel
- * away from initial random coordinates. TODO: refactor me into a single
- * function. */
+ * away from initial random coordinates. */
 void randomsmalltriangle(struct triangle *r, int width, int height, int delta) {
     int x = random()%width;
     int y = random()%height;
-    int triangle;
 
-    if (opt_use_circles && opt_use_triangles) {
-        triangle = random()&1;
-    } else if (opt_use_circles) {
-        triangle = 0;
-    } else {
-        triangle = 1;
-    }
-
-    if (triangle) {
-        r->type = TYPE_TRIANGLE;
+    r->type = selectShapeType();
+    if (r->type == TYPE_TRIANGLE) {
         r->u.t.x1 = x + randbetween(-delta,delta);
         r->u.t.y1 = y + randbetween(-delta,delta);
         r->u.t.x2 = x + randbetween(-delta,delta);
@@ -399,71 +410,32 @@ void randomsmalltriangle(struct triangle *r, int width, int height, int delta) {
         r->u.t.x3 = x + randbetween(-delta,delta);
         r->u.t.y3 = y + randbetween(-delta,delta);
     } else {
-        r->type = TYPE_CIRCLE;
         r->u.c.x1 = x;
         r->u.c.y1 = y;
-        r->u.c.radius = delta;
+        r->u.c.radius = randbetween(1,delta);
     }
-    r->r = random()%256;
-    r->g = random()%256;
-    r->b = random()%256;
-    r->alpha = randbetween(MINALPHA,MAXALPHA);
+    setRandomColor(r);
     normalize(r,width,height);
 }
 
 /* Apply a random mutation to the specified triangle/circle. */
 void mutatetriangle(struct triangle *t, int width, int height) {
-    if (rand() % MUTATION_RANDMOVE_PROB == 0) {
-        if (t->type == TYPE_TRIANGLE) {
-            t->u.t.x1 = random()%width;
-            t->u.t.y1 = random()%height;
-            t->u.t.x2 = random()%width;
-            t->u.t.y2 = random()%height;
-            t->u.t.x3 = random()%width;
-            t->u.t.y3 = random()%height;
-        } else {
-            t->u.c.x1 = random()%width;
-            t->u.c.y1 = random()%height;
-            t->u.c.radius = random()%width;
-        }
+    int choice = random() % 6;
+
+    if (choice == 0) {
+        setRandomVertexes(t,width,height);
         normalize(t,width,height);
-    }
-    if (rand() % MUTATION_MEDMOVE_PROB == 0) {
-        if (t->type == TYPE_TRIANGLE) {
-            t->u.t.x1 += randbetween(-20,20);
-            t->u.t.y1 += randbetween(-20,20);
-            t->u.t.x2 += randbetween(-20,20);
-            t->u.t.y2 += randbetween(-20,20);
-            t->u.t.x3 += randbetween(-20,20);
-            t->u.t.y3 += randbetween(-20,20);
-        } else {
-            t->u.c.x1 += randbetween(-20,20);
-            t->u.c.y1 += randbetween(-20,20);
-            t->u.c.radius += randbetween(-20,20);
-        }
+    } else if (choice == 1) {
+        moveVertexes(t,20);
         normalize(t,width,height);
-    }
-    if (rand() % MUTATION_SMALLMOVE_PROB == 0) {
-        if (t->type == TYPE_TRIANGLE) {
-            t->u.t.x1 += randbetween(-5,5);
-            t->u.t.y1 += randbetween(-5,5);
-            t->u.t.x2 += randbetween(-5,5);
-            t->u.t.y2 += randbetween(-5,5);
-            t->u.t.x3 += randbetween(-5,5);
-            t->u.t.y3 += randbetween(-5,5);
-        } else {
-            t->u.c.x1 += randbetween(-5,5);
-            t->u.c.y1 += randbetween(-5,5);
-            t->u.c.radius += randbetween(-5,5);
-        }
+    } else if (choice == 2) {
+        moveVertexes(t,5);
         normalize(t,width,height);
-    }
-    if (rand() % MUTATION_RANDCOLOR_PROB == 0) {
+    } else if (choice == 3) {
         t->r = random()%256;
         t->g = random()%256;
         t->b = random()%256;
-    }
-    if (rand() % MUTATION_COLORMOVE_PROB == 0) {
+    } else if (choice == 4) {
         int r,g,b;
 
         r = t->r + randbetween(-5,5);
@@ -478,8 +450,7 @@ void mutatetriangle(struct triangle *t, int width, int height) {
         t->r = r;
         t->g = g;
         t->b = b;
-    }
-    if (rand() % MUTATION_RANDALPHA_PROB == 0) {
+    } else if (choice == 5) {
         t->alpha = randbetween(MINALPHA,MAXALPHA);
     }
 }
@@ -673,7 +644,7 @@ void mutatetriangles(struct triangles *rs, int count, int width, int height) {
     /* Mutate every single triangle. */
     for (j = 0; j < count; j++) {
         struct triangle *r = &rs->triangles[random()%rs->inuse];
-        mutatetriangle(r,width,height);
+        if (random() % 1000 < opt_mutation_rate) mutatetriangle(r,width,height);
     }
 }
 
@@ -748,10 +719,11 @@ void showHelp(char *progname) {
     fprintf(stderr,
         "Usage: %s <filename.png> <filename.bin> <filename.svg> [options]\n"
         "\n"
-        "--use-triangles   <0 or 1> (default: 1).\n"
-        "--use-circles     <0 or 1> (default: 0).\n"
-        "--max-shapes      <count> (default: 64).\n"
-        "--initial-shapes  <count> (default: 1).\n"
+        "--use-triangles   <0 or 1> default: 1.\n"
+        "--use-circles     <0 or 1> default: 0.\n"
+        "--max-shapes      <count> default: 64.\n"
+        "--initial-shapes  <count> default: 1.\n"
+        "--mutation-rate   <count> From 0 to 1000, default: 200\n"
         "--restart         Don't load the old state at startup.\n"
         "--help            Just show this help.\n"
         ,progname);
@@ -795,6 +767,8 @@ int main(int argc, char **argv)
                 state.max_shapes = atoi(argv[++j]);
             } else if (!strcmp(argv[j],"--initial-shapes") && moreargs) {
                 state.max_shapes_incremental = atoi(argv[++j]);
+            } else if (!strcmp(argv[j],"--mutation-rate") && moreargs) {
+                opt_mutation_rate = atoi(argv[++j]);
             } else if (!strcmp(argv[j],"--restart")) {
                 opt_restart = 1;
             } else if (!strcmp(argv[j],"--help")) {
@@ -808,9 +782,10 @@ int main(int argc, char **argv)
     }
 
     /* Sanity check. */
-    if (state.max_shapes_incremental > state.max_shapes) {
+    if (state.max_shapes_incremental > state.max_shapes)
         state.max_shapes = state.max_shapes_incremental;
-    }
+    if (opt_mutation_rate > 1000)
+        opt_mutation_rate = 1000;
 
     /* Load the PNG in memory. */
     fp = fopen(argv[1],"rb");
@@ -835,7 +810,11 @@ int main(int argc, char **argv)
     state.absbestdiff = bestdiff = 100;
 
     /* Load the binary file if any. */
-    if (!opt_restart) loadBinary(argv[2],best);
+    if (!opt_restart) {
+        loadBinary(argv[2],best);
+    } else {
+        best->inuse = state.max_shapes_incremental;
+    }
     absbest->inuse = best->inuse;
     memcpy(absbest->triangles,best->triangles,
         sizeof(struct triangle)*best->count);
